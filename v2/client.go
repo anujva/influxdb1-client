@@ -179,7 +179,7 @@ func (c *client) Ping(timeout time.Duration) (time.Duration, string, error) {
 	}
 
 	if resp.StatusCode != http.StatusNoContent {
-		var err = errors.New(string(body))
+		err := errors.New(string(body))
 		return 0, "", err
 	}
 
@@ -397,18 +397,18 @@ func (c *client) Write(bp BatchPoints) error {
 			continue
 		}
 		if _, err := io.WriteString(w, p.pt.PrecisionString(bp.Precision())); err != nil {
-			return err
+			return fmt.Errorf("error writing string: %v", err)
 		}
 
 		if _, err := w.Write([]byte{'\n'}); err != nil {
-			return err
+			return fmt.Errorf("error writing byte of newline: %v", err)
 		}
 	}
 
 	// gzip writer should be closed to flush data into underlying buffer
 	if c, ok := w.(io.Closer); ok {
 		if err := c.Close(); err != nil {
-			return err
+			return fmt.Errorf("error closing client: %v", err)
 		}
 	}
 
@@ -417,7 +417,7 @@ func (c *client) Write(bp BatchPoints) error {
 
 	req, err := http.NewRequest("POST", u.String(), &b)
 	if err != nil {
-		return err
+		return fmt.Errorf("error creating a new http request: %v", err)
 	}
 	if c.encoding != DefaultEncoding {
 		req.Header.Set("Content-Encoding", string(c.encoding))
@@ -437,18 +437,22 @@ func (c *client) Write(bp BatchPoints) error {
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return err
+		return fmt.Errorf("error making the httpclient.do: %v", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return err
+		return fmt.Errorf("error reading the body: %v", err)
 	}
 
 	if resp.StatusCode != http.StatusNoContent && resp.StatusCode != http.StatusOK {
-		var err = errors.New(string(body))
-		return err
+		err := errors.New(string(body))
+		return fmt.Errorf(
+			"error in the body of the response from influxdb, Status: %v, %s",
+			err,
+			resp.Status,
+		)
 	}
 
 	return nil
@@ -495,7 +499,10 @@ func NewQueryWithRP(command, database, retentionPolicy, precision string) Query 
 // NewQueryWithParameters returns a query object.
 // The database and precision arguments can be empty strings if they are not needed for the query.
 // parameters is a map of the parameter names used in the command to their values.
-func NewQueryWithParameters(command, database, precision string, parameters map[string]interface{}) Query {
+func NewQueryWithParameters(
+	command, database, precision string,
+	parameters map[string]interface{},
+) Query {
 	return Query{
 		Command:    command,
 		Database:   database,
@@ -557,7 +564,10 @@ func (c *client) Query(q Query) (*Response, error) {
 		return nil, err
 	}
 	defer func() {
-		io.Copy(ioutil.Discard, resp.Body) // https://github.com/influxdata/influxdb1-client/issues/58
+		io.Copy(
+			ioutil.Discard,
+			resp.Body,
+		) // https://github.com/influxdata/influxdb1-client/issues/58
 		resp.Body.Close()
 	}()
 
@@ -638,13 +648,18 @@ func checkResponse(resp *http.Response) error {
 	// If we lack a X-Influxdb-Version header, then we didn't get a response from influxdb
 	// but instead some other service. If the error code is also a 500+ code, then some
 	// downstream loadbalancer/proxy/etc had an issue and we should report that.
-	if resp.Header.Get("X-Influxdb-Version") == "" && resp.StatusCode >= http.StatusInternalServerError {
+	if resp.Header.Get("X-Influxdb-Version") == "" &&
+		resp.StatusCode >= http.StatusInternalServerError {
 		body, err := ioutil.ReadAll(resp.Body)
 		if err != nil || len(body) == 0 {
 			return fmt.Errorf("received status code %d from downstream server", resp.StatusCode)
 		}
 
-		return fmt.Errorf("received status code %d from downstream server, with response body: %q", resp.StatusCode, body)
+		return fmt.Errorf(
+			"received status code %d from downstream server, with response body: %q",
+			resp.StatusCode,
+			body,
+		)
 	}
 
 	// If we get an unexpected content type, then it is also not from influx direct and therefore
@@ -654,10 +669,18 @@ func checkResponse(resp *http.Response) error {
 		// like downstream serving a large file
 		body, err := ioutil.ReadAll(io.LimitReader(resp.Body, 1024))
 		if err != nil || len(body) == 0 {
-			return fmt.Errorf("expected json response, got empty body, with status: %v", resp.StatusCode)
+			return fmt.Errorf(
+				"expected json response, got empty body, with status: %v",
+				resp.StatusCode,
+			)
 		}
 
-		return fmt.Errorf("expected json response, got %q, with status: %v and response body: %q", cType, resp.StatusCode, body)
+		return fmt.Errorf(
+			"expected json response, got %q, with status: %v and response body: %q",
+			cType,
+			resp.StatusCode,
+			body,
+		)
 	}
 	return nil
 }
@@ -697,7 +720,6 @@ func (c *client) createDefaultRequest(q Query) (*http.Request, error) {
 	req.URL.RawQuery = params.Encode()
 
 	return req, nil
-
 }
 
 // duplexReader reads responses and writes it to another writer while
